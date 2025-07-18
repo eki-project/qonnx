@@ -91,7 +91,7 @@ class Trunc(CustomOp):
 
     def get_integer_datatype(self, model):
         signed = model.get_tensor_datatype(self.onnx_node.input[0]).signed()
-        bit_width = model.get_initializer(self.onnx_node.input[4])
+        bit_width = model.get_initializer(self.onnx_node.input[5])
         bit_width = int(bit_width)
         if bit_width == 1:
             if signed:
@@ -106,7 +106,7 @@ class Trunc(CustomOp):
         return finn_dt
 
     def get_scaled_integer_datatype(self, model):
-        bit_width = model.get_initializer(self.onnx_node.input[4])
+        bit_width = model.get_initializer(self.onnx_node.input[5])
         bit_width = int(bit_width)
         finn_dt = DataType["SCALEDINT<%d>" % (bit_width)]
         return finn_dt
@@ -116,7 +116,7 @@ class Trunc(CustomOp):
         # scale, zero-point and bitwidth must be read from initializers
         scale = model.get_initializer(node.input[1])
         zeropt = model.get_initializer(node.input[2])
-        bitwidth = model.get_initializer(node.input[4])
+        bitwidth = model.get_initializer(node.input[5])
         assert scale is not None, "Found unspecified scale for Trunc node: " + str(node)
         assert zeropt is not None, "Found unspecified zero point for Trunc node: " + str(node)
         assert bitwidth is not None, "Found unspecified output bitwidth for Trunc node: " + str(node)
