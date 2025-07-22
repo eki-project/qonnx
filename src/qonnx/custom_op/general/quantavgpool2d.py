@@ -97,11 +97,17 @@ class QuantAvgPool2d(CustomOp):
         # so the output is (2**ibits-1) * kernel_size * kernel_size
         # which is then divided by kernel_size * kernel_size
         # so the output is 2**ibits-1 -> input and output need the same number of bits
+        # ibits = self.get_nodeattr("ibits")
+        # return ibits
         ibits = self.get_nodeattr("ibits")
-        return ibits
+        k = self.get_nodeattr("kernel")
+        max_value = 2**ibits - 1
+        max_value = max_value * k * k
+        max_bit_width = int(max_value).bit_length()
+        return max_bit_width
 
     def get_shifts(self):
-        shift_bits = self.get_accum_size() - self.get_nodeattr("obits")
+        shift_bits = self.get_nodeattr("ibits") - self.get_nodeattr("obits")
         shift_bits = shift_bits if shift_bits >= 0 else 0
         return shift_bits
 
@@ -139,6 +145,7 @@ class QuantAvgPool2d(CustomOp):
         idict = {node.input[0]: inp_values}
         sess = rt.InferenceSession(model_avgpool.SerializeToString())
         result_temp = sess.run(None, idict)
+        result_temp = np.array(result_temp)
         # remove scaling introduced by average
         result = np.right_shift(result_temp.astype(int), self.get_shifts())
         if self.get_nodeattr("data_layout") == "NHWC":
