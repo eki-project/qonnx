@@ -103,12 +103,18 @@ class QuantAvgPool2d(CustomOp):
 
     def get_shifts(self):
         # Calculate the number of bits to shift based on input and output bit widths
+        # In the worst case, every element of the input vector contains the largest value fitting
+        # the input bit size i.e. 2**ibits-1. Therefore the accumulator will contain the value
+        # (2**ibits-1)*k*k, where k is the kernel size. After the division mandated in the AvgNode
+        # by k*k, the largest value that can be present is (2**ibits-1), which then needs to be
+        # shifted to fit into the output type.
         shift_bits = self.get_nodeattr("ibits") - self.get_nodeattr("obits")
         shift_bits = shift_bits if shift_bits >= 0 else 0
         return shift_bits
 
     def execute_node(self, context, graph):
         # create a standard average pooling node to help calculate the result
+        # Implements: \sum_{i=0}^{k}(\sum_{j=0}^{k} x_{i,j}) / (k*k) >> (ibits - obits)
         node = self.onnx_node
         k = self.get_nodeattr("kernel")
         s = self.get_nodeattr("stride")
