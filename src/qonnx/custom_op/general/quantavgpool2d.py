@@ -93,12 +93,7 @@ class QuantAvgPool2d(CustomOp):
         model.set_tensor_datatype(node.output[0], dtype)
 
     def get_accum_size(self):
-        # The maximum of the avg pool is if all inputs are the 2**ibits-1
-        # so the output is (2**ibits-1) * kernel_size * kernel_size
-        # which is then divided by kernel_size * kernel_size
-        # so the output is 2**ibits-1 -> input and output need the same number of bits
-        # ibits = self.get_nodeattr("ibits")
-        # return ibits
+        # Calculate the maximum bit width of the accumulator
         ibits = self.get_nodeattr("ibits")
         k = self.get_nodeattr("kernel")
         max_value = 2**ibits - 1
@@ -107,6 +102,7 @@ class QuantAvgPool2d(CustomOp):
         return max_bit_width
 
     def get_shifts(self):
+        # Calculate the number of bits to shift based on input and output bit widths
         shift_bits = self.get_nodeattr("ibits") - self.get_nodeattr("obits")
         shift_bits = shift_bits if shift_bits >= 0 else 0
         return shift_bits
