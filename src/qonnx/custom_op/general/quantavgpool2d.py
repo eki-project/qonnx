@@ -26,6 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from typing import Any
 import numpy as np
 import onnxruntime as rt
 from onnx import TensorProto, helper
@@ -40,7 +41,7 @@ class QuantAvgPool2d(CustomOp):
     """CustomOp that corresponds to the quantized average pooling
     layer from Brevitas"""
 
-    def get_nodeattr_types(self):
+    def get_nodeattr_types(self)-> dict[str, Any]:
         return {
             "stride": ("i", True, 1),
             "kernel": ("i", True, 1),
@@ -50,6 +51,7 @@ class QuantAvgPool2d(CustomOp):
             "signed": ("i", True, 0, {0, 1}),
             # data layout attribute can be set to "NCHW" or "NHWC"
             "data_layout": ("s", False, "NCHW", {"NCHW", "NHWC"}),
+            "op_version": ("i", False, 1),
         }
 
     def make_shape_compatible_op(self, model):
@@ -92,29 +94,41 @@ class QuantAvgPool2d(CustomOp):
             raise Exception("Unsupported output datatype for QuantAvgPool2d")
         model.set_tensor_datatype(node.output[0], dtype)
 
-    def get_accum_size(self):
+    def get_accum_size(self) -> int:
         # Calculate the maximum bit width of the accumulator
-        ibits = self.get_nodeattr("ibits")
-        k = self.get_nodeattr("kernel")
+        ibits:int = self.get_nodeattr("ibits")
+        k:int = self.get_nodeattr("kernel")
         max_value = 2**ibits - 1
         max_value = max_value * k * k
         max_bit_width = int(max_value).bit_length()
         return max_bit_width
 
     def get_shifts(self):
-        # Calculate the number of bits to shift based on input and output bit widths
-        # In the worst case, every element of the input vector contains the largest value fitting
-        # the input bit size i.e. 2**ibits-1. Therefore the accumulator will contain the value
-        # (2**ibits-1)*k*k, where k is the kernel size. After the division mandated in the AvgNode
-        # by k*k, the largest value that can be present is (2**ibits-1), which then needs to be
-        # shifted to fit into the output type.
-        shift_bits = self.get_nodeattr("ibits") - self.get_nodeattr("obits")
-        shift_bits = shift_bits if shift_bits >= 0 else 0
-        return shift_bits
+        
+        op_version:int = self.get_nodeattr("op_version")
+        if op_version == 1:
+            shift_bits = self.get_accum_size() - self.get_nodeattr("obits")
+            shift_bits = shift_bits if shift_bits >= 0 else 0
+            return shift_bits
+        elif op_version == 2:
+            # Calculate the number of bits to shift based on input and output bit widths
+            # In the worst case, every element of the input vector contains the largest value fitting
+            # the input bit size i.e. 2**ibits-1. Therefore the accumulator will contain the value
+            # (2**ibits-1)*k*k, where k is the kernel size. After the division mandated in the AvgNode
+            # by k*k, the largest value that can be present is (2**ibits-1), which then needs to be
+            # shifted to fit into the output type.
+            shift_bits = self.get_nodeattr("ibits") - self.get_nodeattr("obits")
+            shift_bits = shift_bits if shift_bits >= 0 else 0
+            return shift_bits
+        else:
+            raise Exception(
+                "Unsupported op_version %d for QuantAvgPool2d" % op_version
+            )
 
-    def execute_node(self, context, graph):
+    def execute_node(self, context, graph) -> None:
         # create a standard average pooling node to help calculate the result
         # Implements: \sum_{i=0}^{k}(\sum_{j=0}^{k} x_{i,j}) / (k*k) >> (ibits - obits)
+        op_version:int = self.get_nodeattr("op_version")
         node = self.onnx_node
         k = self.get_nodeattr("kernel")
         s = self.get_nodeattr("stride")
@@ -147,7 +161,11 @@ class QuantAvgPool2d(CustomOp):
         idict = {node.input[0]: inp_values}
         sess = rt.InferenceSession(model_avgpool.SerializeToString())
         result_temp = sess.run(None, idict)
-        result = np.right_shift(result_temp[0].astype(int), self.get_shifts())
+        if op_version == 1:
+            result_temp = np.round(result_temp[0] * (k * k))
+            result = np.right_shift(result_temp.astype(int), self.get_shifts())
+        else:
+            result = np.right_shift(result_temp[0].astype(int), self.get_shifts())
         if self.get_nodeattr("data_layout") == "NHWC":
             result = result.transpose(0, 2, 3, 1)
         context[node.output[0]] = result.astype(np.float32)
