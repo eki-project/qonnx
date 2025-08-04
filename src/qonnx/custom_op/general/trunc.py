@@ -26,13 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from typing import Literal, Any
 import numpy as np
 import onnx.helper as helper
 
 from qonnx.core.datatype import DataType
 from qonnx.custom_op.base import CustomOp
 from qonnx.custom_op.general.quant import max_int, min_int, resolve_rounding_mode
-from warnings import deprecated
+from warnings import warn
 
 
 def trunc(inp_tensor, scale, zeropt, input_bit_width, narrow, signed, output_scale, output_bit_width, rounding_mode):
@@ -65,10 +66,6 @@ def trunc(inp_tensor, scale, zeropt, input_bit_width, narrow, signed, output_sca
 
     return y
 
-@deprecated(
-    "Using the old QuantAvgPool2d behavior is deprecated and will be removed in a future release. "
-    "Please export your model with the new version of Brevitas."
-)
 def trunc_v1(inp_tensor, scale, zeropt, input_bit_width, output_bit_width, rounding_mode):
     # Port of TruncIntQuant class from Brevitas: https://bit.ly/3wzIpTR
 
@@ -105,7 +102,7 @@ class Trunc(CustomOp):
     values.
     """
 
-    def get_nodeattr_types(self):
+    def get_nodeattr_types(self) -> dict[str, tuple]:
         return {
             # The rounding mode, which is used for the trunc function
             "rounding_mode": ("s", True, "FLOOR"),
@@ -117,13 +114,13 @@ class Trunc(CustomOp):
         node = self.onnx_node
         return helper.make_node("Identity", [node.input[0]], [node.output[0]])
     
-    def get_op_version(self):
+    def get_op_version(self) -> Literal[1] | Literal[2]:
         """Returns the version of the custom operation."""
         return 1 if len(self.onnx_node.input) == 5 else 2
 
     def get_integer_datatype(self, model):
         signed = model.get_tensor_datatype(self.onnx_node.input[0]).signed()
-        bit_width = model.get_initializer(self.onnx_node.input[5]) if get_op_version() == 2 else model.get_initializer(self.onnx_node.input[4])
+        bit_width = model.get_initializer(self.onnx_node.input[5]) if self.get_op_version() == 2 else model.get_initializer(self.onnx_node.input[4])
         bit_width = int(bit_width)
         if bit_width == 1:
             if signed:
@@ -138,17 +135,24 @@ class Trunc(CustomOp):
         return finn_dt
 
     def get_scaled_integer_datatype(self, model):
-        bit_width = model.get_initializer(self.onnx_node.input[5]) if get_op_version() == 2 else model.get_initializer(self.onnx_node.input[4])
+        bit_width = model.get_initializer(self.onnx_node.input[5]) if self.get_op_version() == 2 else model.get_initializer(self.onnx_node.input[4])
         bit_width = int(bit_width)
         finn_dt = DataType["SCALEDINT<%d>" % (bit_width)]
         return finn_dt
 
     def get_output_dtype(self, model):
         node = self.onnx_node
+        
+        if self.get_op_version() == 1:
+            warn(
+                "Using the old QuantAvgPool2d behavior is deprecated and will be removed in a future release. "
+                "Please export your model with the new version of Brevitas."
+            )
+        
         # scale, zero-point and bitwidth must be read from initializers
         scale = model.get_initializer(node.input[1])
         zeropt = model.get_initializer(node.input[2])
-        bitwidth = model.get_initializer(node.input[5]) if get_op_version() == 2 else model.get_initializer(node.input[4])
+        bitwidth = model.get_initializer(node.input[5]) if self.get_op_version() == 2 else model.get_initializer(node.input[4])
         assert scale is not None, "Found unspecified scale for Trunc node: " + str(node)
         assert zeropt is not None, "Found unspecified zero point for Trunc node: " + str(node)
         assert bitwidth is not None, "Found unspecified output bitwidth for Trunc node: " + str(node)
@@ -167,7 +171,7 @@ class Trunc(CustomOp):
             finn_dt = self.get_scaled_integer_datatype(model)
         return finn_dt
 
-    def infer_node_datatype(self, model):
+    def infer_node_datatype(self, model) -> None:
         try:
             finn_dt = self.get_output_dtype(model)
         except AssertionError:
@@ -175,14 +179,14 @@ class Trunc(CustomOp):
         node = self.onnx_node
         model.set_tensor_datatype(node.output[0], finn_dt)
 
-    def execute_node(self, context, graph):
+    def execute_node(self, context, graph) -> None:
         node = self.onnx_node
         # save inputs
         inp_tensor = context[node.input[0]]
         scale = context[node.input[1]]
         zeropt = context[node.input[2]]
         input_bit_width = context[node.input[3]]
-        if get_op_version() == 2:
+        if self.get_op_version() == 2:
             output_scale = context[node.input[4]]
             output_bit_width = context[node.input[5]]
         else:
@@ -192,7 +196,7 @@ class Trunc(CustomOp):
         narrow = self.get_nodeattr("narrow")
         signed = self.get_nodeattr("signed")
         # calculate output
-        if get_op_version() == 2:
+        if self.get_op_version() == 2:
             ret = trunc(
                 inp_tensor, scale, zeropt, input_bit_width, narrow, signed, output_scale, output_bit_width, rounding_mode
             )
@@ -201,5 +205,5 @@ class Trunc(CustomOp):
         # set context according to output name
         context[node.output[0]] = ret
 
-    def verify_node(self):
+    def verify_node(self) -> None:
         pass
